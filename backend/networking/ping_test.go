@@ -37,7 +37,7 @@ func TestPingDevice(t *testing.T) {
 			device.Set("ip", tc.ip)
 			device.Set("ping_cmd", tc.ping_cmd)
 
-			_, err := PingDevice(device)
+			_, err := PingDevice(device, nil)
 			if err == nil && tc.wantError {
 				t.Errorf("Expected error but got none")
 			} else if err != nil && !tc.wantError {

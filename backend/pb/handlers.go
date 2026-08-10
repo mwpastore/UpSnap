@@ -36,7 +36,7 @@ func HandlerWake(e *core.RequestEvent) error {
 	}
 
 	if err := asyncCall(e, func() *router.ApiError {
-		if err := networking.WakeDevice(record); err != nil {
+		if err := networking.WakeDevice(record, networking.DeviceIPFunc(e.App, record)); err != nil {
 			logger.Error.Println(err)
 			record.Set("status", "offline")
 			if err := e.App.Save(record); err != nil {
@@ -125,7 +125,7 @@ func HandlerReboot(e *core.RequestEvent) error {
 		// so we wait a little to make sure the device has shut down completely and is ready to receive wake requests.
 		time.Sleep(15 * time.Second)
 
-		if err := networking.WakeDevice(record); err != nil {
+		if err := networking.WakeDevice(record, networking.DeviceIPFunc(e.App, record)); err != nil {
 			logger.Error.Println(err)
 			record.Set("status", "offline")
 			if err := e.App.Save(record); err != nil {
@@ -202,7 +202,7 @@ func HandlerWakeGroup(e *core.RequestEvent) error {
 				logger.Error.Println(err)
 			}
 
-			if err := networking.WakeDevice(record); err != nil {
+			if err := networking.WakeDevice(record, networking.DeviceIPFunc(e.App, record)); err != nil {
 				logger.Error.Println(err)
 				record.Set("status", "offline")
 				if err := e.App.Save(record); err != nil {

@@ -62,7 +62,7 @@ func SetPingJobs(app core.App) {
 				if status == "pending" {
 					return
 				}
-				isUp, err := networking.PingDevice(d)
+				isUp, err := networking.PingDevice(d, nil)
 				if err != nil {
 					logger.Error.Println(err)
 				}
@@ -149,7 +149,7 @@ func SetWakeShutdownJobs(app core.App) {
 				if d.GetString("status") == "pending" {
 					return
 				}
-				isOnline, err := networking.PingDevice(d)
+				isOnline, err := networking.PingDevice(d, nil)
 				if err != nil {
 					logger.Error.Println(err)
 					return
@@ -167,7 +167,7 @@ func SetWakeShutdownJobs(app core.App) {
 				if err := d.PostScan(); err != nil {
 					logger.Error.Println(err)
 				}
-				if err := networking.WakeDevice(d); err != nil {
+				if err := networking.WakeDevice(d, networking.DeviceIPFunc(app, d)); err != nil {
 					logger.Error.Println(err)
 					d.Set("status", "offline")
 				} else {
@@ -193,7 +193,7 @@ func SetWakeShutdownJobs(app core.App) {
 				if d.GetString("status") == "pending" {
 					return
 				}
-				isOnline, err := networking.PingDevice(d)
+				isOnline, err := networking.PingDevice(d, nil)
 				if err != nil {
 					logger.Error.Println(err)
 					return

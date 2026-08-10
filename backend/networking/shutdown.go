@@ -77,7 +77,7 @@ func ShutdownDevice(device *core.Record) error {
 				return fmt.Errorf("%s", stderr.String())
 			} else {
 				for {
-					isOnline, err := PingDevice(device)
+					isOnline, err := PingDevice(device, nil)
 					if err != nil {
 						logger.Error.Println(err)
 						return err
@@ -94,7 +94,7 @@ func ShutdownDevice(device *core.Record) error {
 				}
 			}
 		default:
-			isOnline, err := PingDevice(device)
+			isOnline, err := PingDevice(device, nil)
 			if err != nil {
 				logger.Error.Println(err)
 				return err

@@ -13,10 +13,18 @@ import (
 	probing "github.com/prometheus-community/pro-bing"
 )
 
-func PingDevice(device *core.Record) (bool, error) {
+// PingDevice reports whether the device answers a ping. getIp is called for
+// the address to ping, so it can follow ip changes written by concurrent
+// tracking scans (see DeviceIPFunc); a nil getIp pings the record's ip. A
+// custom ping_cmd runs verbatim and ignores the ip either way.
+func PingDevice(device *core.Record, getIp func() string) (bool, error) {
 	ping_cmd := device.GetString("ping_cmd")
 	if ping_cmd == "" {
-		pinger, err := probing.NewPinger(device.GetString("ip"))
+		ip := device.GetString("ip")
+		if getIp != nil {
+			ip = getIp()
+		}
+		pinger, err := probing.NewPinger(ip)
 		if err != nil {
 			return false, err
 		}
