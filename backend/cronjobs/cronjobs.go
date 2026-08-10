@@ -1,7 +1,6 @@
 package cronjobs
 
 import (
-	"github.com/pocketbase/pocketbase"
 	"github.com/pocketbase/pocketbase/core"
 	"github.com/robfig/cron/v3"
 	"github.com/seriousm4x/upsnap/iptracking"
@@ -56,6 +55,9 @@ func SetPingJobs(app core.App) {
 		for _, device := range devices {
 			// ping device
 			go func(d *core.Record) {
+				// only write status changes so concurrent writers to other
+				// fields (e.g. ip tracking) are never clobbered
+				d.IgnoreUnchangedFields(true)
 				status := d.GetString("status")
 				if status == "pending" {
 					return
@@ -119,7 +121,7 @@ func SetPingJobs(app core.App) {
 	}
 }
 
-func SetWakeShutdownJobs(app *pocketbase.PocketBase) {
+func SetWakeShutdownJobs(app core.App) {
 	// remove existing jobs
 	for _, job := range CronWakeShutdown.Entries() {
 		CronWakeShutdown.Remove(job.ID)
@@ -143,6 +145,7 @@ func SetWakeShutdownJobs(app *pocketbase.PocketBase) {
 					logger.Error.Println(err)
 					return
 				}
+				d.IgnoreUnchangedFields(true)
 				if d.GetString("status") == "pending" {
 					return
 				}
@@ -158,6 +161,11 @@ func SetWakeShutdownJobs(app *pocketbase.PocketBase) {
 				if err := app.Save(d); err != nil {
 					logger.Error.Println("Failed to save record:", err)
 					return
+				}
+				// refresh the save baseline so a revert to the load-time
+				// status below isn't dropped as unchanged
+				if err := d.PostScan(); err != nil {
+					logger.Error.Println(err)
 				}
 				if err := networking.WakeDevice(d); err != nil {
 					logger.Error.Println(err)
@@ -181,6 +189,7 @@ func SetWakeShutdownJobs(app *pocketbase.PocketBase) {
 					logger.Error.Println(err)
 					return
 				}
+				d.IgnoreUnchangedFields(true)
 				if d.GetString("status") == "pending" {
 					return
 				}
@@ -199,6 +208,8 @@ func SetWakeShutdownJobs(app *pocketbase.PocketBase) {
 				d.Set("status", "pending")
 				if err := app.Save(d); err != nil {
 					logger.Error.Println("Failed to save record:", err)
+				} else if err := d.PostScan(); err != nil {
+					logger.Error.Println(err)
 				}
 				if err := networking.ShutdownDevice(d); err != nil {
 					logger.Error.Println(err)

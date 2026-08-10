@@ -22,10 +22,17 @@ func HandlerWake(e *core.RequestEvent) error {
 	if err != nil {
 		return apis.NewNotFoundError("The device does not exist.", err)
 	}
+	// only write status changes so concurrent writers to other fields
+	// (e.g. ip tracking) are never clobbered; same in the handlers below
+	record.IgnoreUnchangedFields(true)
 
+	// the PostScan calls here and below refresh the save baseline so a
+	// later revert to the load-time status isn't dropped as unchanged
 	record.Set("status", "pending")
 	if err := e.App.Save(record); err != nil {
 		logger.Error.Println("Failed to save record:", err)
+	} else if err := record.PostScan(); err != nil {
+		logger.Error.Println(err)
 	}
 
 	if err := asyncCall(e, func() *router.ApiError {
@@ -56,10 +63,13 @@ func HandlerSleep(e *core.RequestEvent) error {
 	if err != nil {
 		return apis.NewNotFoundError("The device does not exist.", err)
 	}
+	record.IgnoreUnchangedFields(true)
 
 	record.Set("status", "pending")
 	if err := e.App.Save(record); err != nil {
 		logger.Error.Println("Failed to save record:", err)
+	} else if err := record.PostScan(); err != nil {
+		logger.Error.Println(err)
 	}
 
 	if err := asyncCall(e, func() *router.ApiError {
@@ -91,10 +101,13 @@ func HandlerReboot(e *core.RequestEvent) error {
 	if err != nil {
 		return apis.NewNotFoundError("The device does not exist.", err)
 	}
+	record.IgnoreUnchangedFields(true)
 
 	record.Set("status", "pending")
 	if err := e.App.Save(record); err != nil {
 		logger.Error.Println("Failed to save record:", err)
+	} else if err := record.PostScan(); err != nil {
+		logger.Error.Println(err)
 	}
 
 	if err := asyncCall(e, func() *router.ApiError {
@@ -139,10 +152,13 @@ func HandlerShutdown(e *core.RequestEvent) error {
 	if err != nil {
 		return apis.NewNotFoundError("The device does not exist.", err)
 	}
+	record.IgnoreUnchangedFields(true)
 
 	record.Set("status", "pending")
 	if err := e.App.Save(record); err != nil {
 		logger.Error.Println("Failed to save record:", err)
+	} else if err := record.PostScan(); err != nil {
+		logger.Error.Println(err)
 	}
 
 	if err := asyncCall(e, func() *router.ApiError {
@@ -178,9 +194,12 @@ func HandlerWakeGroup(e *core.RequestEvent) error {
 
 	for _, record := range records {
 		go func() {
+			record.IgnoreUnchangedFields(true)
 			record.Set("status", "pending")
 			if err := e.App.Save(record); err != nil {
 				logger.Error.Println("Failed to save record:", err)
+			} else if err := record.PostScan(); err != nil {
+				logger.Error.Println(err)
 			}
 
 			if err := networking.WakeDevice(record); err != nil {
@@ -212,9 +231,12 @@ func HandlerShutdownGroup(e *core.RequestEvent) error {
 
 	for _, record := range records {
 		go func() {
+			record.IgnoreUnchangedFields(true)
 			record.Set("status", "pending")
 			if err := e.App.Save(record); err != nil {
 				logger.Error.Println("Failed to save record:", err)
+			} else if err := record.PostScan(); err != nil {
+				logger.Error.Println(err)
 			}
 
 			if err := networking.ShutdownDevice(record); err != nil {
