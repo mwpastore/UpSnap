@@ -13,6 +13,7 @@ import (
 	"github.com/pocketbase/pocketbase/core"
 	"github.com/pocketbase/pocketbase/tools/router"
 	"github.com/robfig/cron/v3"
+	"github.com/seriousm4x/upsnap/iptracking"
 	"github.com/seriousm4x/upsnap/logger"
 	"github.com/seriousm4x/upsnap/networking"
 )
@@ -36,6 +37,7 @@ func HandlerWake(e *core.RequestEvent) error {
 	}
 
 	if err := asyncCall(e, func() *router.ApiError {
+		iptracking.TrackDeviceAfterWake(e.App, record)
 		if err := networking.WakeDevice(record, networking.DeviceIPFunc(e.App, record)); err != nil {
 			logger.Error.Println(err)
 			record.Set("status", "offline")
@@ -125,6 +127,7 @@ func HandlerReboot(e *core.RequestEvent) error {
 		// so we wait a little to make sure the device has shut down completely and is ready to receive wake requests.
 		time.Sleep(15 * time.Second)
 
+		iptracking.TrackDeviceAfterWake(e.App, record)
 		if err := networking.WakeDevice(record, networking.DeviceIPFunc(e.App, record)); err != nil {
 			logger.Error.Println(err)
 			record.Set("status", "offline")
@@ -202,6 +205,7 @@ func HandlerWakeGroup(e *core.RequestEvent) error {
 				logger.Error.Println(err)
 			}
 
+			iptracking.TrackDeviceAfterWake(e.App, record)
 			if err := networking.WakeDevice(record, networking.DeviceIPFunc(e.App, record)); err != nil {
 				logger.Error.Println(err)
 				record.Set("status", "offline")

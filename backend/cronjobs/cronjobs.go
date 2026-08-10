@@ -167,6 +167,7 @@ func SetWakeShutdownJobs(app core.App) {
 				if err := d.PostScan(); err != nil {
 					logger.Error.Println(err)
 				}
+				iptracking.TrackDeviceAfterWake(app, d)
 				if err := networking.WakeDevice(d, networking.DeviceIPFunc(app, d)); err != nil {
 					logger.Error.Println(err)
 					d.Set("status", "offline")

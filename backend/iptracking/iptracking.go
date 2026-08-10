@@ -5,10 +5,12 @@ package iptracking
 import (
 	"net"
 	"sync/atomic"
+	"time"
 
 	"github.com/pocketbase/pocketbase/core"
 	"github.com/seriousm4x/upsnap/logger"
 	"github.com/seriousm4x/upsnap/networking"
+	"golang.org/x/sync/singleflight"
 )
 
 var sweepRunning atomic.Bool
@@ -24,6 +26,13 @@ func init() {
 
 // nmapScan is a seam for tests to stub out the privileged nmap invocation
 var nmapScan = networking.NmapScan
+
+// scanGroup joins concurrent scans of the same subnet into one nmap run
+var scanGroup singleflight.Group
+
+// wakeScanDelay gives a woken device time to boot and renew its dhcp lease
+// before its subnet is scanned; a variable so tests can shorten it
+var wakeScanDelay = 15 * time.Second
 
 // TrackAllSubnets scans the local subnets of devices with ip tracking enabled
 // and updates their ip address if their mac address is found at a different
@@ -85,6 +94,28 @@ func CatchUpSweep(app core.App) {
 	TrackAllSubnets(app)
 }
 
+// TrackDeviceAfterWake schedules a scan of the device's subnet to pick up
+// the ip address the device acquired while booting. Does nothing unless ip
+// tracking is enabled globally and for the device.
+func TrackDeviceAfterWake(app core.App, device *core.Record) {
+	if !networking.DeviceTrackingEnabled(app, device) {
+		return
+	}
+	subnet, err := networking.DeviceSubnet(device.GetString("ip"), device.GetString("netmask"))
+	if err != nil {
+		logger.Error.Println("Ip tracking for", device.GetString("name")+":", err)
+		return
+	}
+	// the timer fires regardless of how the wake attempt ends and is not
+	// cancelled on app shutdown: a scan is harmless when the device never
+	// came up, and at worst runs once against a closing app
+	time.AfterFunc(wakeScanDelay, func() {
+		if err := TrackOneSubnet(app, subnet); err != nil {
+			logger.Error.Println("Ip tracking scan for", subnet.String()+":", err)
+		}
+	})
+}
+
 // TrackOneSubnet runs an nmap scan of the given subnet and updates the ip
 // address of any ip-tracked device whose mac address is found at a new
 // address within its own subnet. Returns an error for a non-scannable subnet.
@@ -93,6 +124,17 @@ func TrackOneSubnet(app core.App, subnet *net.IPNet) error {
 		return err
 	}
 
+	// a caller whose subnet is already being scanned waits for that scan's
+	// result instead of spawning another nmap run. The joined scan may have
+	// started before the caller's trigger and miss a very recent change;
+	// the periodic sweep covers that gap
+	_, err, _ := scanGroup.Do(subnet.String(), func() (any, error) {
+		return nil, scanSubnet(app, subnet)
+	})
+	return err
+}
+
+func scanSubnet(app core.App, subnet *net.IPNet) error {
 	scan, err := nmapScan(subnet.String())
 	if err != nil {
 		return err
