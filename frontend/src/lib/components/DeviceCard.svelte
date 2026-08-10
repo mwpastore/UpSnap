@@ -60,7 +60,7 @@
 	});
 
 	function sleep() {
-		fetch(`${backendUrl}api/upsnap/sleep/${device.id}`, {
+		fetch(`${backendUrl}api/upsnap/sleep/${device.id}?async=true`, {
 			headers: {
 				Authorization: $pocketbase.authStore.token
 			}
@@ -70,7 +70,7 @@
 	}
 
 	function reboot() {
-		fetch(`${backendUrl}api/upsnap/reboot/${device.id}`, {
+		fetch(`${backendUrl}api/upsnap/reboot/${device.id}?async=true`, {
 			headers: {
 				Authorization: $pocketbase.authStore.token
 			}

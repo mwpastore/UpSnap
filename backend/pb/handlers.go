@@ -27,6 +27,12 @@ func HandlerWake(e *core.RequestEvent) error {
 	// (e.g. ip tracking) are never clobbered; same in the handlers below
 	record.IgnoreUnchangedFields(true)
 
+	// a pending device already has an action in progress: report the
+	// current state instead of starting another one; same below
+	if record.GetString("status") == "pending" {
+		return e.JSON(http.StatusOK, record)
+	}
+
 	// the PostScan calls here and below refresh the save baseline so a
 	// later revert to the load-time status isn't dropped as unchanged
 	record.Set("status", "pending")
@@ -67,6 +73,10 @@ func HandlerSleep(e *core.RequestEvent) error {
 	}
 	record.IgnoreUnchangedFields(true)
 
+	if record.GetString("status") == "pending" {
+		return e.JSON(http.StatusOK, record)
+	}
+
 	record.Set("status", "pending")
 	if err := e.App.Save(record); err != nil {
 		logger.Error.Println("Failed to save record:", err)
@@ -104,6 +114,10 @@ func HandlerReboot(e *core.RequestEvent) error {
 		return apis.NewNotFoundError("The device does not exist.", err)
 	}
 	record.IgnoreUnchangedFields(true)
+
+	if record.GetString("status") == "pending" {
+		return e.JSON(http.StatusOK, record)
+	}
 
 	record.Set("status", "pending")
 	if err := e.App.Save(record); err != nil {
@@ -164,6 +178,10 @@ func HandlerShutdown(e *core.RequestEvent) error {
 		return apis.NewNotFoundError("The device does not exist.", err)
 	}
 	record.IgnoreUnchangedFields(true)
+
+	if record.GetString("status") == "pending" {
+		return e.JSON(http.StatusOK, record)
+	}
 
 	record.Set("status", "pending")
 	if err := e.App.Save(record); err != nil {
