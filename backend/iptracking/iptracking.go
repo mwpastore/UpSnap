@@ -94,6 +94,31 @@ func CatchUpSweep(app core.App) {
 	TrackAllSubnets(app)
 }
 
+// TrackDevice scans the device's subnet and returns the device re-read from
+// the database, so an action about to use its ip address sees the address
+// the scan found. Returns the given record unchanged when ip tracking is
+// disabled globally or for the device, or when the scan fails.
+func TrackDevice(app core.App, device *core.Record) *core.Record {
+	if !networking.DeviceTrackingEnabled(app, device) {
+		return device
+	}
+	subnet, err := networking.DeviceSubnet(device.GetString("ip"), device.GetString("netmask"))
+	if err != nil {
+		logger.Error.Println("Ip tracking for", device.GetString("name")+":", err)
+		return device
+	}
+	if err := TrackOneSubnet(app, subnet); err != nil {
+		logger.Error.Println("Ip tracking scan for", subnet.String()+":", err)
+		return device
+	}
+	fresh, err := app.FindRecordById("devices", device.Id)
+	if err != nil {
+		logger.Error.Println(err)
+		return device
+	}
+	return fresh
+}
+
 // TrackDeviceAfterWake schedules a scan of the device's subnet to pick up
 // the ip address the device acquired while booting. Does nothing unless ip
 // tracking is enabled globally and for the device.

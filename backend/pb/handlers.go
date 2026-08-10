@@ -113,10 +113,13 @@ func HandlerReboot(e *core.RequestEvent) error {
 	}
 
 	if err := asyncCall(e, func() *router.ApiError {
-		if err := networking.ShutdownDevice(record); err != nil {
+		device := iptracking.TrackDevice(e.App, record)
+		device.IgnoreUnchangedFields(true)
+
+		if err := networking.ShutdownDevice(device); err != nil {
 			logger.Error.Println(err)
-			record.Set("status", "online")
-			if err := e.App.Save(record); err != nil {
+			device.Set("status", "online")
+			if err := e.App.Save(device); err != nil {
 				logger.Error.Println("Failed to save record:", err)
 			}
 			return apis.NewBadRequestError(err.Error(), nil)
@@ -127,18 +130,18 @@ func HandlerReboot(e *core.RequestEvent) error {
 		// so we wait a little to make sure the device has shut down completely and is ready to receive wake requests.
 		time.Sleep(15 * time.Second)
 
-		iptracking.TrackDeviceAfterWake(e.App, record)
-		if err := networking.WakeDevice(record, networking.DeviceIPFunc(e.App, record)); err != nil {
+		iptracking.TrackDeviceAfterWake(e.App, device)
+		if err := networking.WakeDevice(device, networking.DeviceIPFunc(e.App, device)); err != nil {
 			logger.Error.Println(err)
-			record.Set("status", "offline")
-			if err := e.App.Save(record); err != nil {
+			device.Set("status", "offline")
+			if err := e.App.Save(device); err != nil {
 				logger.Error.Println("Failed to save record:", err)
 			}
 			return apis.NewBadRequestError(err.Error(), nil)
 		}
 
-		record.Set("status", "online")
-		if err := e.App.Save(record); err != nil {
+		device.Set("status", "online")
+		if err := e.App.Save(device); err != nil {
 			logger.Error.Println("Failed to save record:", err)
 		}
 
@@ -147,6 +150,11 @@ func HandlerReboot(e *core.RequestEvent) error {
 		return err
 	}
 
+	// re-read so a synchronous request reports the action's outcome
+	// instead of the pending state
+	if fresh, err := e.App.FindRecordById("devices", record.Id); err == nil {
+		return e.JSON(http.StatusOK, fresh)
+	}
 	return e.JSON(http.StatusOK, record)
 }
 
@@ -165,17 +173,20 @@ func HandlerShutdown(e *core.RequestEvent) error {
 	}
 
 	if err := asyncCall(e, func() *router.ApiError {
-		if err := networking.ShutdownDevice(record); err != nil {
+		device := iptracking.TrackDevice(e.App, record)
+		device.IgnoreUnchangedFields(true)
+
+		if err := networking.ShutdownDevice(device); err != nil {
 			logger.Error.Println(strings.ReplaceAll(err.Error(), "\n", ""))
-			record.Set("status", "online")
-			if err := e.App.Save(record); err != nil {
+			device.Set("status", "online")
+			if err := e.App.Save(device); err != nil {
 				logger.Error.Println("Failed to save record:", err)
 			}
 			return apis.NewBadRequestError(err.Error(), nil)
 		}
 
-		record.Set("status", "offline")
-		if err := e.App.Save(record); err != nil {
+		device.Set("status", "offline")
+		if err := e.App.Save(device); err != nil {
 			logger.Error.Println("Failed to save record:", err)
 		}
 
@@ -184,6 +195,11 @@ func HandlerShutdown(e *core.RequestEvent) error {
 		return err
 	}
 
+	// re-read so a synchronous request reports the action's outcome
+	// instead of the pending state
+	if fresh, err := e.App.FindRecordById("devices", record.Id); err == nil {
+		return e.JSON(http.StatusOK, fresh)
+	}
 	return e.JSON(http.StatusOK, record)
 }
 
@@ -243,17 +259,20 @@ func HandlerShutdownGroup(e *core.RequestEvent) error {
 				logger.Error.Println(err)
 			}
 
-			if err := networking.ShutdownDevice(record); err != nil {
+			device := iptracking.TrackDevice(e.App, record)
+			device.IgnoreUnchangedFields(true)
+
+			if err := networking.ShutdownDevice(device); err != nil {
 				logger.Error.Println(err)
-				record.Set("status", "online")
-				if err := e.App.Save(record); err != nil {
+				device.Set("status", "online")
+				if err := e.App.Save(device); err != nil {
 					logger.Error.Println("Failed to save record:", err)
 				}
 				return
 			}
 
-			record.Set("status", "offline")
-			if err := e.App.Save(record); err != nil {
+			device.Set("status", "offline")
+			if err := e.App.Save(device); err != nil {
 				logger.Error.Println("Failed to save record:", err)
 			}
 		}()

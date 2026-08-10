@@ -194,16 +194,21 @@ func SetWakeShutdownJobs(app core.App) {
 				if d.GetString("status") == "pending" {
 					return
 				}
+				// refresh a tracked ip first so the online check and the
+				// shutdown command use the device's current address
+				d = iptracking.TrackDevice(app, d)
+				d.IgnoreUnchangedFields(true)
+				// the scan can take a while: bail if a wake was initiated
+				// in the meantime
+				if d.GetString("status") == "pending" {
+					return
+				}
 				isOnline, err := networking.PingDevice(d, nil)
 				if err != nil {
 					logger.Error.Println(err)
 					return
 				}
 				if !isOnline {
-					return
-				}
-				status := d.GetString("status")
-				if status != "online" {
 					return
 				}
 				d.Set("status", "pending")

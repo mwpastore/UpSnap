@@ -384,6 +384,40 @@ func TestPeriodicSweepAndCatchUp(t *testing.T) {
 	}
 }
 
+// TrackDevice scans synchronously and returns the re-read device; when the
+// subnet can't be scanned it returns the given record.
+func TestTrackDevice(t *testing.T) {
+	app := newTestApp(t)
+	enableTracking(t, app)
+	device := newDevice(t, app, "refreshed", "127.0.0.50", testNetmask, "AA:BB:CC:DD:07:01", true)
+	stubScan(t, map[string]string{"AA:BB:CC:DD:07:01": "127.0.0.99"})
+
+	if ip := TrackDevice(app, device).GetString("ip"); ip != "127.0.0.99" {
+		t.Errorf("Ip mismatch: expected 127.0.0.99, got %s", ip)
+	}
+
+	// TEST-NET-1 (RFC 5737) is never assigned to an interface
+	unscannable := newDevice(t, app, "unscannable", "192.0.2.5", "255.255.255.0", "AA:BB:CC:DD:07:02", true)
+	if got := TrackDevice(app, unscannable); got != unscannable {
+		t.Error("Expected the original record back for an unscannable subnet")
+	}
+}
+
+// Without the global interval setting, TrackDevice never scans and returns
+// the given record.
+func TestTrackDeviceRequiresGlobalEnable(t *testing.T) {
+	app := newTestApp(t)
+	device := newDevice(t, app, "untouched", "127.0.0.50", testNetmask, "AA:BB:CC:DD:08:01", true)
+	scanned := stubScan(t, map[string]string{"AA:BB:CC:DD:08:01": "127.0.0.99"})
+
+	if got := TrackDevice(app, device); got != device {
+		t.Error("Expected the original record back when tracking is disabled")
+	}
+	if len(*scanned) != 0 {
+		t.Errorf("Expected no scans, got %v", *scanned)
+	}
+}
+
 // A scan of a subnet already being scanned joins the in-flight scan instead
 // of running nmap again.
 func TestTrackOneSubnetCoalesces(t *testing.T) {
