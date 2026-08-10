@@ -85,18 +85,21 @@ func HandlerSleep(e *core.RequestEvent) error {
 	}
 
 	if err := asyncCall(e, func() *router.ApiError {
-		resp, err := networking.SleepDevice(record)
+		device := iptracking.TrackDevice(e.App, record)
+		device.IgnoreUnchangedFields(true)
+
+		resp, err := networking.SleepDevice(device)
 		if err != nil {
 			logger.Error.Println(err)
-			record.Set("status", "online")
-			if err := e.App.Save(record); err != nil {
+			device.Set("status", "online")
+			if err := e.App.Save(device); err != nil {
 				logger.Error.Println("Failed to save record:", err)
 			}
 			return apis.NewBadRequestError(resp.Message, nil)
 		}
 
-		record.Set("status", "offline")
-		if err := e.App.Save(record); err != nil {
+		device.Set("status", "offline")
+		if err := e.App.Save(device); err != nil {
 			logger.Error.Println("Failed to save record:", err)
 		}
 
