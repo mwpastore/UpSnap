@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/pocketbase/pocketbase/core"
 	"github.com/pocketbase/pocketbase/tests"
@@ -48,6 +50,29 @@ func newDevice(t *testing.T, app core.App, name, ip, netmask, mac string, trackI
 		t.Fatalf("Got unexpected error: %v", err)
 	}
 	return device
+}
+
+// enableTracking creates a settings record with a tracking interval, which
+// enables ip tracking globally.
+func enableTracking(t *testing.T, app core.App) {
+	t.Helper()
+	collection, err := app.FindCollectionByNameOrId("settings_private")
+	if err != nil {
+		t.Fatalf("Got unexpected error: %v", err)
+	}
+	settings := core.NewRecord(collection)
+	settings.Set("track_ip_interval", "@every 60s")
+	if err := app.SaveNoValidate(settings); err != nil {
+		t.Fatalf("Got unexpected error: %v", err)
+	}
+}
+
+// shortenWakeScanDelay makes the post-wake scan fire almost immediately.
+func shortenWakeScanDelay(t *testing.T) {
+	t.Helper()
+	orig := wakeScanDelay
+	wakeScanDelay = 10 * time.Millisecond
+	t.Cleanup(func() { wakeScanDelay = orig })
 }
 
 // newLegacyDevice saves a device bypassing field validation, like rows
@@ -274,6 +299,58 @@ func TestTrackOneSubnetSameSubnetGuard(t *testing.T) {
 	}
 }
 
+// A wake schedules a delayed scan of the woken device's subnet; devices
+// without track_ip never schedule one.
+func TestTrackDeviceAfterWake(t *testing.T) {
+	app := newTestApp(t)
+	enableTracking(t, app)
+	shortenWakeScanDelay(t)
+	device := newDevice(t, app, "woken", "127.0.0.50", testNetmask, "AA:BB:CC:DD:05:01", true)
+	// in a different subnet, so a scheduling bug would show up as a second scan
+	untracked := newDevice(t, app, "untracked", "127.0.5.5", "255.255.255.0", "AA:BB:CC:DD:05:02", false)
+	scanned := stubScan(t, map[string]string{"AA:BB:CC:DD:05:01": "127.0.0.99"})
+
+	TrackDeviceAfterWake(app, untracked)
+	TrackDeviceAfterWake(app, device)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		fresh, err := app.FindRecordById("devices", device.Id)
+		if err != nil {
+			t.Fatalf("Got unexpected error: %v", err)
+		}
+		if fresh.GetString("ip") == "127.0.0.99" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("Ip not updated by the post-wake scan, scans: %v", *scanned)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	// give a wrongly scheduled scan for the untracked device time to fire
+	time.Sleep(50 * time.Millisecond)
+	if len(*scanned) != 1 || (*scanned)[0] != testSubnet {
+		t.Errorf("Expected a single scan of %s, got %v", testSubnet, *scanned)
+	}
+}
+
+// Without the global interval setting, a wake schedules no scan even for a
+// tracked device.
+func TestTrackDeviceAfterWakeRequiresGlobalEnable(t *testing.T) {
+	app := newTestApp(t)
+	shortenWakeScanDelay(t)
+	device := newDevice(t, app, "woken", "127.0.0.50", testNetmask, "AA:BB:CC:DD:06:01", true)
+	scanned := stubScan(t, map[string]string{"AA:BB:CC:DD:06:01": "127.0.0.99"})
+
+	TrackDeviceAfterWake(app, device)
+
+	time.Sleep(100 * time.Millisecond)
+	if len(*scanned) != 0 {
+		t.Errorf("Expected no scans, got %v", *scanned)
+	}
+}
+
 // A paused periodic sweep scans nothing and owes a catch-up sweep, which
 // runs at most once until the next pause; an unpaused sweep scans directly.
 func TestPeriodicSweepAndCatchUp(t *testing.T) {
@@ -304,6 +381,76 @@ func TestPeriodicSweepAndCatchUp(t *testing.T) {
 	CatchUpSweep(app)
 	if len(*scanned) != 2 {
 		t.Errorf("Expected an unpaused sweep to owe nothing, got %v", *scanned)
+	}
+}
+
+// TrackDevice scans synchronously and returns the re-read device; when the
+// subnet can't be scanned it returns the given record.
+func TestTrackDevice(t *testing.T) {
+	app := newTestApp(t)
+	enableTracking(t, app)
+	device := newDevice(t, app, "refreshed", "127.0.0.50", testNetmask, "AA:BB:CC:DD:07:01", true)
+	stubScan(t, map[string]string{"AA:BB:CC:DD:07:01": "127.0.0.99"})
+
+	if ip := TrackDevice(app, device).GetString("ip"); ip != "127.0.0.99" {
+		t.Errorf("Ip mismatch: expected 127.0.0.99, got %s", ip)
+	}
+
+	// TEST-NET-1 (RFC 5737) is never assigned to an interface
+	unscannable := newDevice(t, app, "unscannable", "192.0.2.5", "255.255.255.0", "AA:BB:CC:DD:07:02", true)
+	if got := TrackDevice(app, unscannable); got != unscannable {
+		t.Error("Expected the original record back for an unscannable subnet")
+	}
+}
+
+// Without the global interval setting, TrackDevice never scans and returns
+// the given record.
+func TestTrackDeviceRequiresGlobalEnable(t *testing.T) {
+	app := newTestApp(t)
+	device := newDevice(t, app, "untouched", "127.0.0.50", testNetmask, "AA:BB:CC:DD:08:01", true)
+	scanned := stubScan(t, map[string]string{"AA:BB:CC:DD:08:01": "127.0.0.99"})
+
+	if got := TrackDevice(app, device); got != device {
+		t.Error("Expected the original record back when tracking is disabled")
+	}
+	if len(*scanned) != 0 {
+		t.Errorf("Expected no scans, got %v", *scanned)
+	}
+}
+
+// A scan of a subnet already being scanned joins the in-flight scan instead
+// of running nmap again.
+func TestTrackOneSubnetCoalesces(t *testing.T) {
+	app := newTestApp(t)
+
+	entered := make(chan struct{}, 2)
+	release := make(chan struct{})
+	var calls atomic.Int32
+	orig := nmapScan
+	nmapScan = func(scanRange string) (networking.Nmaprun, error) {
+		calls.Add(1)
+		entered <- struct{}{}
+		<-release
+		return networking.Nmaprun{}, nil
+	}
+	t.Cleanup(func() { nmapScan = orig })
+
+	subnet := mustSubnet(t, testSubnet)
+	errs := make(chan error, 2)
+	go func() { errs <- TrackOneSubnet(app, subnet) }()
+	<-entered // the first scan is now in flight
+	go func() { errs <- TrackOneSubnet(app, subnet) }()
+	// give the second call time to reach the flight group, then finish the scan
+	time.Sleep(100 * time.Millisecond)
+	close(release)
+
+	for range 2 {
+		if err := <-errs; err != nil {
+			t.Fatalf("Got unexpected error: %v", err)
+		}
+	}
+	if n := calls.Load(); n != 1 {
+		t.Errorf("Expected the second scan to join the first, got %d nmap runs", n)
 	}
 }
 

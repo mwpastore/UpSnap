@@ -4,11 +4,20 @@ package networking
 
 import (
 	"fmt"
+	"sync"
 
 	"kernel.org/pub/linux/libs/security/libcap/cap"
 )
 
+// nmapMu serializes scans: raising and restoring NET_RAW mutates
+// process-wide state, so concurrent scans would race the capability
+// dance and could leave it raised for unrelated child processes
+var nmapMu sync.Mutex
+
 func NmapScan(scanRange string) (Nmaprun, error) {
+	nmapMu.Lock()
+	defer nmapMu.Unlock()
+
 	orig := cap.GetProc()
 	defer orig.SetProc() // restore original caps on exit.
 

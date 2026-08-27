@@ -80,18 +80,17 @@
 		countdown(Date.now(), 'shutdown');
 		device.status = 'pending';
 
-		fetch(`${backendUrl}api/upsnap/shutdown/${device.id}`, {
+		// the shutdown runs asynchronously in the backend; the outcome
+		// arrives as a realtime status update
+		fetch(`${backendUrl}api/upsnap/shutdown/${device.id}?async=true`, {
 			headers: {
 				Authorization: $pocketbase.authStore.token
 			}
 		})
-			.then((resp) => resp.json())
-			.then(async (data) => {
-				if (data.status !== 200) {
+			.then((resp) => {
+				if (!resp.ok) {
 					device.status = 'online';
-					return;
 				}
-				device = data as Device;
 			})
 			.catch((err) => {
 				toast.error(err.message);
@@ -118,6 +117,16 @@
 				clearInterval(interval);
 
 				interval = 0;
+
+				if (timeout <= 0 && device.status === 'pending') {
+					// the countdown outlived the action (e.g. a tracking scan
+					// ran before it) or a realtime update was missed: re-sync
+					$pocketbase
+						.collection('devices')
+						.getOne<Device>(device.id)
+						.then((data) => (device = data))
+						.catch(() => {});
+				}
 			}
 		}, 1000);
 	}

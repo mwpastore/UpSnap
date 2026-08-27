@@ -14,7 +14,11 @@ import (
 	"github.com/seriousm4x/upsnap/logger"
 )
 
-func WakeDevice(device *core.Record) error {
+// WakeDevice wakes the device and waits for it to come online. getIp is
+// called for the address to ping on each attempt, so it can follow ip
+// changes written by concurrent tracking scans (see DeviceIPFunc); a nil
+// getIp always pings the record's ip.
+func WakeDevice(device *core.Record, getIp func() string) error {
 	logger.Info.Println("Wake triggered for", device.GetString("name"))
 
 	wakeTimeout := device.GetInt("wake_timeout")
@@ -79,7 +83,7 @@ func WakeDevice(device *core.Record) error {
 					}
 					return fmt.Errorf("%s not online after %d seconds", device.GetString("name"), wakeTimeout)
 				}
-				isOnline, err := PingDevice(device)
+				isOnline, err := PingDevice(device, getIp)
 				if err != nil {
 					logger.Error.Println(err)
 					return err
@@ -113,7 +117,7 @@ func WakeDevice(device *core.Record) error {
 		start := time.Now()
 		for {
 			time.Sleep(1 * time.Second)
-			isOnline, err := PingDevice(device)
+			isOnline, err := PingDevice(device, getIp)
 			if err != nil {
 				logger.Error.Println(err)
 				return err

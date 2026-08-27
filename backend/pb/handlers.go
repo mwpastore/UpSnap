@@ -13,6 +13,7 @@ import (
 	"github.com/pocketbase/pocketbase/core"
 	"github.com/pocketbase/pocketbase/tools/router"
 	"github.com/robfig/cron/v3"
+	"github.com/seriousm4x/upsnap/iptracking"
 	"github.com/seriousm4x/upsnap/logger"
 	"github.com/seriousm4x/upsnap/networking"
 )
@@ -22,14 +23,28 @@ func HandlerWake(e *core.RequestEvent) error {
 	if err != nil {
 		return apis.NewNotFoundError("The device does not exist.", err)
 	}
+	// only write status changes so concurrent writers to other fields
+	// (e.g. ip tracking) are never clobbered; same in the handlers below
+	record.IgnoreUnchangedFields(true)
 
+	// a pending device already has an action in progress: report the
+	// current state instead of starting another one; same below
+	if record.GetString("status") == "pending" {
+		return e.JSON(http.StatusOK, record)
+	}
+
+	// the PostScan calls here and below refresh the save baseline so a
+	// later revert to the load-time status isn't dropped as unchanged
 	record.Set("status", "pending")
 	if err := e.App.Save(record); err != nil {
 		logger.Error.Println("Failed to save record:", err)
+	} else if err := record.PostScan(); err != nil {
+		logger.Error.Println(err)
 	}
 
 	if err := asyncCall(e, func() *router.ApiError {
-		if err := networking.WakeDevice(record); err != nil {
+		iptracking.TrackDeviceAfterWake(e.App, record)
+		if err := networking.WakeDevice(record, networking.DeviceIPFunc(e.App, record)); err != nil {
 			logger.Error.Println(err)
 			record.Set("status", "offline")
 			if err := e.App.Save(record); err != nil {
@@ -56,25 +71,35 @@ func HandlerSleep(e *core.RequestEvent) error {
 	if err != nil {
 		return apis.NewNotFoundError("The device does not exist.", err)
 	}
+	record.IgnoreUnchangedFields(true)
+
+	if record.GetString("status") == "pending" {
+		return e.JSON(http.StatusOK, record)
+	}
 
 	record.Set("status", "pending")
 	if err := e.App.Save(record); err != nil {
 		logger.Error.Println("Failed to save record:", err)
+	} else if err := record.PostScan(); err != nil {
+		logger.Error.Println(err)
 	}
 
 	if err := asyncCall(e, func() *router.ApiError {
-		resp, err := networking.SleepDevice(record)
+		device := iptracking.TrackDevice(e.App, record)
+		device.IgnoreUnchangedFields(true)
+
+		resp, err := networking.SleepDevice(device)
 		if err != nil {
 			logger.Error.Println(err)
-			record.Set("status", "online")
-			if err := e.App.Save(record); err != nil {
+			device.Set("status", "online")
+			if err := e.App.Save(device); err != nil {
 				logger.Error.Println("Failed to save record:", err)
 			}
 			return apis.NewBadRequestError(resp.Message, nil)
 		}
 
-		record.Set("status", "offline")
-		if err := e.App.Save(record); err != nil {
+		device.Set("status", "offline")
+		if err := e.App.Save(device); err != nil {
 			logger.Error.Println("Failed to save record:", err)
 		}
 
@@ -91,17 +116,27 @@ func HandlerReboot(e *core.RequestEvent) error {
 	if err != nil {
 		return apis.NewNotFoundError("The device does not exist.", err)
 	}
+	record.IgnoreUnchangedFields(true)
+
+	if record.GetString("status") == "pending" {
+		return e.JSON(http.StatusOK, record)
+	}
 
 	record.Set("status", "pending")
 	if err := e.App.Save(record); err != nil {
 		logger.Error.Println("Failed to save record:", err)
+	} else if err := record.PostScan(); err != nil {
+		logger.Error.Println(err)
 	}
 
 	if err := asyncCall(e, func() *router.ApiError {
-		if err := networking.ShutdownDevice(record); err != nil {
+		device := iptracking.TrackDevice(e.App, record)
+		device.IgnoreUnchangedFields(true)
+
+		if err := networking.ShutdownDevice(device); err != nil {
 			logger.Error.Println(err)
-			record.Set("status", "online")
-			if err := e.App.Save(record); err != nil {
+			device.Set("status", "online")
+			if err := e.App.Save(device); err != nil {
 				logger.Error.Println("Failed to save record:", err)
 			}
 			return apis.NewBadRequestError(err.Error(), nil)
@@ -112,17 +147,18 @@ func HandlerReboot(e *core.RequestEvent) error {
 		// so we wait a little to make sure the device has shut down completely and is ready to receive wake requests.
 		time.Sleep(15 * time.Second)
 
-		if err := networking.WakeDevice(record); err != nil {
+		iptracking.TrackDeviceAfterWake(e.App, device)
+		if err := networking.WakeDevice(device, networking.DeviceIPFunc(e.App, device)); err != nil {
 			logger.Error.Println(err)
-			record.Set("status", "offline")
-			if err := e.App.Save(record); err != nil {
+			device.Set("status", "offline")
+			if err := e.App.Save(device); err != nil {
 				logger.Error.Println("Failed to save record:", err)
 			}
 			return apis.NewBadRequestError(err.Error(), nil)
 		}
 
-		record.Set("status", "online")
-		if err := e.App.Save(record); err != nil {
+		device.Set("status", "online")
+		if err := e.App.Save(device); err != nil {
 			logger.Error.Println("Failed to save record:", err)
 		}
 
@@ -131,6 +167,11 @@ func HandlerReboot(e *core.RequestEvent) error {
 		return err
 	}
 
+	// re-read so a synchronous request reports the action's outcome
+	// instead of the pending state
+	if fresh, err := e.App.FindRecordById("devices", record.Id); err == nil {
+		return e.JSON(http.StatusOK, fresh)
+	}
 	return e.JSON(http.StatusOK, record)
 }
 
@@ -139,24 +180,34 @@ func HandlerShutdown(e *core.RequestEvent) error {
 	if err != nil {
 		return apis.NewNotFoundError("The device does not exist.", err)
 	}
+	record.IgnoreUnchangedFields(true)
+
+	if record.GetString("status") == "pending" {
+		return e.JSON(http.StatusOK, record)
+	}
 
 	record.Set("status", "pending")
 	if err := e.App.Save(record); err != nil {
 		logger.Error.Println("Failed to save record:", err)
+	} else if err := record.PostScan(); err != nil {
+		logger.Error.Println(err)
 	}
 
 	if err := asyncCall(e, func() *router.ApiError {
-		if err := networking.ShutdownDevice(record); err != nil {
+		device := iptracking.TrackDevice(e.App, record)
+		device.IgnoreUnchangedFields(true)
+
+		if err := networking.ShutdownDevice(device); err != nil {
 			logger.Error.Println(strings.ReplaceAll(err.Error(), "\n", ""))
-			record.Set("status", "online")
-			if err := e.App.Save(record); err != nil {
+			device.Set("status", "online")
+			if err := e.App.Save(device); err != nil {
 				logger.Error.Println("Failed to save record:", err)
 			}
 			return apis.NewBadRequestError(err.Error(), nil)
 		}
 
-		record.Set("status", "offline")
-		if err := e.App.Save(record); err != nil {
+		device.Set("status", "offline")
+		if err := e.App.Save(device); err != nil {
 			logger.Error.Println("Failed to save record:", err)
 		}
 
@@ -165,6 +216,11 @@ func HandlerShutdown(e *core.RequestEvent) error {
 		return err
 	}
 
+	// re-read so a synchronous request reports the action's outcome
+	// instead of the pending state
+	if fresh, err := e.App.FindRecordById("devices", record.Id); err == nil {
+		return e.JSON(http.StatusOK, fresh)
+	}
 	return e.JSON(http.StatusOK, record)
 }
 
@@ -178,12 +234,16 @@ func HandlerWakeGroup(e *core.RequestEvent) error {
 
 	for _, record := range records {
 		go func() {
+			record.IgnoreUnchangedFields(true)
 			record.Set("status", "pending")
 			if err := e.App.Save(record); err != nil {
 				logger.Error.Println("Failed to save record:", err)
+			} else if err := record.PostScan(); err != nil {
+				logger.Error.Println(err)
 			}
 
-			if err := networking.WakeDevice(record); err != nil {
+			iptracking.TrackDeviceAfterWake(e.App, record)
+			if err := networking.WakeDevice(record, networking.DeviceIPFunc(e.App, record)); err != nil {
 				logger.Error.Println(err)
 				record.Set("status", "offline")
 				if err := e.App.Save(record); err != nil {
@@ -212,22 +272,28 @@ func HandlerShutdownGroup(e *core.RequestEvent) error {
 
 	for _, record := range records {
 		go func() {
+			record.IgnoreUnchangedFields(true)
 			record.Set("status", "pending")
 			if err := e.App.Save(record); err != nil {
 				logger.Error.Println("Failed to save record:", err)
+			} else if err := record.PostScan(); err != nil {
+				logger.Error.Println(err)
 			}
 
-			if err := networking.ShutdownDevice(record); err != nil {
+			device := iptracking.TrackDevice(e.App, record)
+			device.IgnoreUnchangedFields(true)
+
+			if err := networking.ShutdownDevice(device); err != nil {
 				logger.Error.Println(err)
-				record.Set("status", "online")
-				if err := e.App.Save(record); err != nil {
+				device.Set("status", "online")
+				if err := e.App.Save(device); err != nil {
 					logger.Error.Println("Failed to save record:", err)
 				}
 				return
 			}
 
-			record.Set("status", "offline")
-			if err := e.App.Save(record); err != nil {
+			device.Set("status", "offline")
+			if err := e.App.Save(device); err != nil {
 				logger.Error.Println("Failed to save record:", err)
 			}
 		}()

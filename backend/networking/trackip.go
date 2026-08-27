@@ -3,7 +3,38 @@ package networking
 import (
 	"errors"
 	"net"
+
+	"github.com/pocketbase/pocketbase/core"
 )
+
+// DeviceTrackingEnabled reports whether ip tracking is enabled both
+// globally and for the device.
+func DeviceTrackingEnabled(app core.App, device *core.Record) bool {
+	if !device.GetBool("track_ip") {
+		return false
+	}
+	settings, err := app.FindFirstRecordByFilter("settings_private", "")
+	return err == nil && settings.GetString("track_ip_interval") != ""
+}
+
+// DeviceIPFunc returns a function that returns the device's current ip
+// address. When ip tracking is enabled globally and for the device, each
+// call re-reads the device from the database to pick up concurrent tracking
+// updates; otherwise it always returns the given record's ip. The returned
+// function is not safe for concurrent use.
+func DeviceIPFunc(app core.App, device *core.Record) func() string {
+	if !DeviceTrackingEnabled(app, device) {
+		return func() string {
+			return device.GetString("ip")
+		}
+	}
+	return func() string {
+		if fresh, err := app.FindRecordById("devices", device.Id); err == nil {
+			device = fresh
+		}
+		return device.GetString("ip")
+	}
+}
 
 // DeviceSubnet returns the device's IPv4 subnet computed from its ip and netmask.
 func DeviceSubnet(ipStr, maskStr string) (*net.IPNet, error) {

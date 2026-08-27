@@ -321,6 +321,8 @@ func resetDeviceStates(app *pocketbase.PocketBase) error {
 		return err
 	}
 	for _, device := range devices {
+		// only write the status so concurrent writers are never clobbered
+		device.IgnoreUnchangedFields(true)
 		device.Set("status", "offline")
 		if err := app.Save(device); err != nil {
 			return err
