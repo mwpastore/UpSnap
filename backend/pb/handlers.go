@@ -236,16 +236,6 @@ func HandlerShutdownGroup(e *core.RequestEvent) error {
 	return e.JSON(http.StatusOK, records)
 }
 
-type Nmaprun struct {
-	Host []struct {
-		Address []struct {
-			Addr     string `xml:"addr,attr" binding:"required"`
-			Addrtype string `xml:"addrtype,attr" binding:"required"`
-			Vendor   string `xml:"vendor,attr"`
-		} `xml:"address"`
-	} `xml:"host"`
-}
-
 func HandlerInitSuperuser(e *core.RequestEvent) error {
 	superusersCollection, err := e.App.FindCollectionByNameOrId(core.CollectionNameSuperusers)
 	if err != nil {
